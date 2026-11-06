@@ -38,6 +38,15 @@ GIF（`rainbow_light.gif`、ゲームの絵が写るのでリポジトリには�
 
 2026-11-06 の結果（ランプ 1 個・開発用 PC）: 今の設定でフレームレート平均 59.5、1 フレームの処理時間は虹色を止めたときと変わらない。
 
+## Workshop
+
+```
+python tools\make_preview.py        プレビュー（preview.png、256x256）を撮ってあるコマから作る
+python ..\tools\make_workshop.py    %USERPROFILE%\Zomboid\Workshop\itsu07_RainbowLight に投稿用フォルダを作って点検
+```
+
+投稿はゲームを Steam から起動し、ワークショップの「作成／更新」でこのフォルダを選ぶ。題名・説明文・公開範囲（限定公開）は `workshop.txt`。preview.png はゲームの画面なのでリポジトリには入れない。
+
 ## まだ確かめていないこと
 
 - ランプをたくさん並べたときの重さ
