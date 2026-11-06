@@ -1,0 +1,31 @@
+module Base
+{
+    /* The only way to get the rainbow bulb: one bulb of every color the game has
+       (ProceduralDistributions: all 9 colors together only in ElectronicStoreLights,
+       GigamartLightbulb and HolidayStuff). Known by everyone, no skill needed. */
+    craftRecipe RL_MakeRainbowBulb
+    {
+        timedAction = MakingElectrical,
+        time = 150,
+        Tags = InHandCraft,
+        category = Electrical,
+        xpAward = Electricity:5,
+        inputs
+        {
+            item 1 tags[base:screwdriver] mode:keep flags[Prop1],
+            item 1 [Base.LightBulbRed] flags[NoBrokenItems],
+            item 1 [Base.LightBulbOrange] flags[NoBrokenItems],
+            item 1 [Base.LightBulbYellow] flags[NoBrokenItems],
+            item 1 [Base.LightBulbGreen] flags[NoBrokenItems],
+            item 1 [Base.LightBulbCyan] flags[NoBrokenItems],
+            item 1 [Base.LightBulbBlue] flags[NoBrokenItems],
+            item 1 [Base.LightBulbPurple] flags[NoBrokenItems],
+            item 1 [Base.LightBulbMagenta] flags[NoBrokenItems],
+            item 1 [Base.LightBulbPink] flags[NoBrokenItems],
+        }
+        outputs
+        {
+            item 1 RainbowLight.LightBulbRainbow,
+        }
+    }
+}

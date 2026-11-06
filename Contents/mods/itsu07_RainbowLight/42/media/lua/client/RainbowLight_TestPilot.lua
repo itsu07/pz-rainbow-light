@@ -228,6 +228,11 @@ local COMMANDS = {}
 -- ui on|off: every UI element (what the game's hide-UI key does)
 COMMANDS.ui = function(id, w, p)
     UIManager.setVisibleAllUI(w[2] ~= "off")
+    -- the hide-UI switch does not reach these two (seen in the screenshots): close them directly
+    if w[2] == "off" then
+        if SurvivalGuide and SurvivalGuide.instance then SurvivalGuide.instance:setVisible(false) end
+        if ISChat and ISChat.instance then ISChat.instance:setVisible(false) end
+    end
     finishCmd("done", "ui " .. w[2])
 end
 
@@ -347,6 +352,54 @@ COMMANDS.hue = function(id, w, p)
     RainbowLight.paused = true
     RainbowLight.applyHue(tonumber(w[2]))
     finishCmd("done", "hue " .. w[2])
+end
+
+-- ---------- crafting (same steps as the crafting window, like CheeseMaking_DebugPilot.lua) ----------
+
+local function craftLogic(player, name)
+    local recipe = getScriptManager():getCraftRecipe(name)
+    if not recipe then return nil, "recipe not found" end
+    local logic = HandcraftLogic.new(player, nil, ISEntityUI.FindCraftSurface(player, 1))
+    logic:setManualSelectInputs(true)
+    logic:setContainers(ISInventoryPaneContextMenu.getContainers(player))
+    logic:setRecipe(recipe)
+    logic:autoPopulateInputs()
+    return logic, recipe
+end
+
+local function countType(player, fullType)
+    return player:getInventory():getCountTypeRecurse(fullType)
+end
+
+-- count <full type>...: how many of each the player carries
+COMMANDS.count = function(id, w, p)
+    local parts = {}
+    for i = 2, #w do table.insert(parts, w[i] .. "=" .. countType(p, w[i])) end
+    finishCmd("done", table.concat(parts, " "))
+end
+
+-- cancraft <recipe>: what the crafting window would say
+COMMANDS.cancraft = function(id, w, p)
+    local logic, recipe = craftLogic(p, w[2])
+    if not logic then finishCmd("error", tostring(recipe)) return end
+    finishCmd("done", tostring(logic:canPerformCurrentRecipe()))
+end
+
+-- craft <recipe>: start the real crafting action and wait until it is over
+COMMANDS.craft = function(id, w, p)
+    local logic, recipe = craftLogic(p, w[2])
+    if not logic then finishCmd("error", tostring(recipe)) return end
+    if not logic:canPerformCurrentRecipe() then finishCmd("done", "cannot") return end
+    ISTimedActionQueue.add(ISHandcraftAction.FromLogic(logic))
+    local started = getTimestampMs()
+    running.deadline = started + 60000
+    running.poll = function()
+        local q = ISTimedActionQueue.getTimedActionQueue(p)
+        if q and #q.queue > 0 then return false end
+        if getTimestampMs() - started < 2500 then return false end
+        finishCmd("done", "finished")
+        return true
+    end
 end
 
 -- class x y z: the color class of the light around the lamp now

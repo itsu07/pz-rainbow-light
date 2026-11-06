@@ -95,6 +95,36 @@ COMMANDS.bulb = function(player, args)
     return true, "bulb=" .. tostring(lamp:getBulbItem())
 end
 
+-- give items=<full type>,<full type>,...: into the player's inventory, sent to the game
+COMMANDS.give = function(player, args)
+    local inv = player:getInventory()
+    local given = {}
+    for t in string.gmatch(tostring(args.items or ""), "[^,]+") do
+        local item = inv:AddItem(t)
+        if item then
+            sendAddItemToContainer(inv, item)
+            table.insert(given, t)
+        end
+    end
+    return true, "gave " .. #given .. ": " .. table.concat(given, ",")
+end
+
+-- strip: take every light bulb (any color, rainbow too) and screwdriver out of the inventory
+COMMANDS.strip = function(player, args)
+    local inv = player:getInventory()
+    local items = inv:getItems()
+    local removed = 0
+    for i = items:size() - 1, 0, -1 do
+        local item = items:get(i)
+        if string.sub(item:getType(), 1, 9) == "LightBulb" or item:hasTag(ItemTag.SCREWDRIVER) then
+            inv:Remove(item)
+            sendRemoveItemFromContainer(inv, item)
+            removed = removed + 1
+        end
+    end
+    return true, "removed " .. removed
+end
+
 -- night hour=<h>: server clock
 COMMANDS.night = function(player, args)
     getGameTime():setTimeOfDay(args.hour or 23)

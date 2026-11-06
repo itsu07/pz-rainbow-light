@@ -28,6 +28,7 @@ import mp_test as mt  # noqa: E402
 
 MOD_ID = 'itsu07_RainbowLight'
 BULB = 'RainbowLight.LightBulbRainbow'
+GIF_FRAMES = 25
 mt.PILOT_CFG = 'RainbowLight_pilot.txt'
 mt.PILOT_STATUS = 'RainbowLight_pilot_status.txt'
 mt.PILOT_CMD = 'RainbowLight_pilot_cmd.txt'
@@ -62,7 +63,7 @@ def strength(rgb, ch):
 
 
 
-def run_tests(root):
+def run_tests(root, gif=False):
     mods = [MOD_ID]
     server = mt.Server(root, mods)
     client = root / 'client1'
@@ -110,12 +111,51 @@ def run_tests(root):
         mt.rcon(f'teleportto "test1" {int(lx) + 2},{int(ly) + 2},{lz}')
         time.sleep(6)
 
+        if not gif:
+            # R: the rainbow bulb is made from one bulb of each of the 9 colors (screwdriver kept)
+            colors = ['Red', 'Orange', 'Yellow', 'Green', 'Cyan', 'Blue', 'Purple', 'Magenta', 'Pink']
+            bulbs = [f'Base.LightBulb{c}' for c in colors]
+            recipe = 'RL_MakeRainbowBulb'
+            note('strip: ' + pilot.run('server strip 0 0 0', 30)[1])
+            time.sleep(2)
+            can = pilot.run(f'cancraft {recipe}')[1]
+            mt.result('PASS' if can == 'false' else 'FAIL', 'R1', f'電球なしでは作れない: cancraft={can}')
+            note(pilot.run('server give 0 0 0 items=' + ','.join(bulbs[:-1] + ['Base.Screwdriver']), 30)[1])
+            time.sleep(2)
+            can = pilot.run(f'cancraft {recipe}')[1]
+            mt.result('PASS' if can == 'false' else 'FAIL', 'R2', f'ピンクだけ足りないと作れない: cancraft={can}')
+            note(pilot.run('server give 0 0 0 items=Base.LightBulbPink', 30)[1])
+            time.sleep(2)
+            can = pilot.run(f'cancraft {recipe}')[1]
+            made = pilot.run(f'craft {recipe}', 70)[1]
+            counts = pilot.run(f'count {BULB} Base.Screwdriver ' + ' '.join(bulbs))[1]
+            note(f'craft: {made} / {counts}')
+            vals = dict(p.split('=') for p in counts.split())
+            ok = (can == 'true' and vals.get(BULB) == '1' and vals.get('Base.Screwdriver') == '1'
+                  and all(vals.get(b) == '0' for b in bulbs))
+            mt.result('PASS' if ok else 'FAIL', 'R3',
+                      f'9 色そろうと作れて、9 色が減りドライバーは残る: cancraft={can} {made} {counts}')
+
         kind, text, _ = pilot.run('server night 0 0 0 hour=23', 30)
         note(f'server night: {text}')
         note('client ' + pilot.run('time 23')[1])
         # night falls slowly; until it is dark the light is capped and no color shows
         note('settle: ' + pilot.run(f'settle {lamp}', 170)[1])
         pilot.run('ui off')
+
+        if gif:
+            # one trip around the rainbow in GIF_FRAMES steps, each shown after the light settled;
+            # tools/make_gif.py plays them back at the mod's speed (PERIOD_MS)
+            note('server ' + pilot.run(f'server bulb {lamp} bulb={BULB}', 30)[1])
+            note('cycle ' + pilot.run('cycle off')[1])
+            time.sleep(3)
+            for i in range(GIF_FRAMES):
+                pilot.run(f'hue {i / GIF_FRAMES:.4f}')
+                time.sleep(0.6)
+                pilot.run(f'shot rl_gif_{i:02d}.png')
+                time.sleep(0.6)
+            note(f'{GIF_FRAMES} frames: ' + str(shots / 'rl_gif_*.png'))
+            return
 
         def shot(name):
             pilot.run(f'shot {name}')
@@ -213,6 +253,7 @@ def run_tests(root):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--gif', action='store_true', help='only film one trip around the rainbow for tools/make_gif.py')
     ap.add_argument('--root', default=str(Path(os.environ.get('USERPROFILE', '')) / 'PZTest_rainbow'))
     a = ap.parse_args()
     try:
@@ -224,7 +265,7 @@ def main():
         say(f'ポート {mt.RCON_PORT} にもうサーバーがいます。先に止めてください')
         return 1
     mt.setup(root, [MOD_ID])
-    run_tests(root)
+    run_tests(root, gif=a.gif)
 
     for name, path in (('client1', root / 'client1' / 'console.txt'), ('server', root / 'server' / 'server-console.txt')):
         errs = mt.mod_errors(mt.read_log(path), [MOD_ID, 'RainbowLight'])
