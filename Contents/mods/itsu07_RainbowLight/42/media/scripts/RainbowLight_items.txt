@@ -1,0 +1,23 @@
+module RainbowLight
+{
+    imports
+    {
+        Base
+    }
+
+    /* The type must start with "LightBulb": IsoLightSwitch.addLightBulb and the
+       vanilla lamp context menu only accept such items. The color here is the
+       start color; lua/client/RainbowLight_Client.lua changes it while lit. */
+    item LightBulbRainbow
+    {
+        DisplayCategory = Electronics,
+        ItemType = base:normal,
+        Weight = 0.3,
+        Icon = LightBulb,
+        ColorBlue = 255,
+        ColorGreen = 255,
+        ColorRed = 255,
+        WorldStaticModel = LightBulb,
+        Tags = base:showcondition;base:hasmetal,
+    }
+}
