@@ -7,6 +7,7 @@ Usage (from the RainbowLight folder):
 Options: --frames DIR (default %USERPROFILE%\\PZTest_rainbow\\client1\\Screenshots),
          --crop x,y,w,h (part of the 1280x720 game window, default around the lamp),
          --loop-ms N (one trip, default 2000 = PERIOD_MS in RainbowLight_Client.lua),
+         --pattern GLOB (which frames, default rl_gif_*.png; the mirror ball test takes rl_ball_run_*.png),
          --out FILE
 Standard library only: reads the PNGs itself and writes the GIF itself (256 colors chosen
 from all frames together by median cut, so every frame shares one palette).
@@ -203,11 +204,12 @@ def main():
     ap.add_argument('--frames', default=str(Path(os.environ.get('USERPROFILE', '')) / 'PZTest_rainbow' / 'client1' / 'Screenshots'))
     ap.add_argument('--crop', default='390,110,600,310')
     ap.add_argument('--loop-ms', type=int, default=2000)
+    ap.add_argument('--pattern', default='rl_gif_*.png')
     ap.add_argument('--out', default=str(HERE.parent / 'rainbow_light.gif'))
     a = ap.parse_args()
-    files = sorted(Path(a.frames).glob('rl_gif_*.png'))
+    files = sorted(Path(a.frames).glob(a.pattern))
     if not files:
-        print(f'{a.frames} に rl_gif_*.png がありません（先に python tools\\light_test.py --gif）')
+        print(f'{a.frames} に {a.pattern} がありません（先に python tools\\light_test.py --gif か --ball）')
         return 1
     crop = tuple(int(v) for v in a.crop.split(','))
     frames = []

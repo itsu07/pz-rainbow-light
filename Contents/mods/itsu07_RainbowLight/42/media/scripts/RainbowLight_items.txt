@@ -20,4 +20,19 @@ module RainbowLight
         WorldStaticModel = LightBulb,
         Tags = base:showcondition;base:hasmetal,
     }
+
+    /* Mirror ball (prototype): in a lit lamp, lua/client/RainbowLight_MirrorBall.lua
+       dims the lamp and throws moving colored spots around it. */
+    item LightBulbMirrorBall
+    {
+        DisplayCategory = Electronics,
+        ItemType = base:normal,
+        Weight = 0.5,
+        Icon = LightBulb,
+        ColorBlue = 255,
+        ColorGreen = 255,
+        ColorRed = 255,
+        WorldStaticModel = LightBulb,
+        Tags = base:showcondition;base:hasmetal,
+    }
 }

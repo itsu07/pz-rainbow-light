@@ -5,6 +5,8 @@ if not isDebugEnabled() then return end
 -- In game: runs commands from RainbowLight_pilot_cmd.txt, answers in RainbowLight_pilot_out.txt.
 
 require "RainbowLight_Client"
+require "RainbowLight_Vehicle"
+require "RainbowLight_MirrorBall"
 
 local TAG = "[RainbowLight][PILOT] "
 
@@ -406,6 +408,382 @@ end
 COMMANDS.class = function(id, w, p)
     local r, g, b = measure(tonumber(w[2]), tonumber(w[3]), tonumber(w[4]))
     finishCmd("done", colorClass(r, g, b) .. " " .. describe(tonumber(w[2]), tonumber(w[3]), tonumber(w[4])))
+end
+
+-- ---------- headlights ----------
+
+-- light on the strip of squares 4 to 9 squares from x,y in direction dx,dy, 3 squares wide
+local function measureStrip(x, y, z, dx, dy)
+    local r, g, b, n = 0, 0, 0, 0
+    for d = 4, 9 do
+        for s = -1, 1 do
+            local sq = getCell():getGridSquare(x + dx * d + dy * s, y + dy * d + dx * s, z)
+            local c = sq and sq:getLightInfo(0)
+            if c then r, g, b, n = r + c:getR(), g + c:getG(), b + c:getB(), n + 1 end
+        end
+    end
+    if n == 0 then return nil end
+    return r / n, g / n, b / n
+end
+
+local DIRS = { E = { 1, 0 }, W = { -1, 0 }, S = { 0, 1 }, N = { 0, -1 } }
+
+-- carlight <vehicle id>: the light on the strips east, west, south and north of the car, and its state
+-- "E r=.. g=.. b=.. class | W ... | ... | on=.. battery=.. mark=.. active=.. colored=.. beam r=.."
+COMMANDS.carlight = function(id, w, p)
+    local v = getVehicleById(tonumber(w[2]))
+    if not v then finishCmd("error", "no vehicle " .. tostring(w[2])) return end
+    local x, y, z = math.floor(v:getX()), math.floor(v:getY()), math.floor(v:getZ())
+    local parts = {}
+    for _, name in ipairs({ "E", "W", "S", "N" }) do
+        local r, g, b = measureStrip(x, y, z, DIRS[name][1], DIRS[name][2])
+        if r then
+            table.insert(parts, name .. " r=" .. f2(r) .. " g=" .. f2(g) .. " b=" .. f2(b) .. " " .. colorClass(r, g, b))
+        else
+            table.insert(parts, name .. " none")
+        end
+    end
+    local left = v:getPartById("HeadlightLeft")
+    local state = "on=" .. tostring(v:getHeadlightsOn()) .. " battery=" .. string.format("%.2f", v:getBatteryCharge())
+        .. " mark=" .. tostring(RainbowLight.isRainbowHeadlight(left))
+        .. " active=" .. tostring(left and left:getLight() and left:getLight():getActive())
+        .. " colored=" .. RainbowLight.coloredHeadlightCount()
+        .. " at=" .. x .. "," .. y .. " time=" .. f2(getGameTime():getTimeOfDay())
+    table.insert(parts, state)
+    finishCmd("done", table.concat(parts, " | "))
+end
+
+-- carhue <0..1>: cycling paused, every rainbow headlight around shows that hue
+COMMANDS.carhue = function(id, w, p)
+    RainbowLight.paused = true
+    RainbowLight.colorHeadlights(RainbowLight.hueToRGB(tonumber(w[2])))
+    finishCmd("done", "hue " .. w[2] .. " colored=" .. RainbowLight.coloredHeadlightCount())
+end
+
+-- carsettle <vehicle id>: wait until the light around the car stops changing (night falling)
+COMMANDS.carsettle = function(id, w, p)
+    local v = getVehicleById(tonumber(w[2]))
+    if not v then finishCmd("error", "no vehicle " .. tostring(w[2])) return end
+    local x, y, z = math.floor(v:getX()), math.floor(v:getY()), math.floor(v:getZ())
+    w = { "settle", tostring(x), tostring(y), tostring(z) }
+    COMMANDS.settle(id, w, p)
+end
+
+-- ---------- mirror ball ----------
+
+local function brightness(sq)
+    local c = sq:getLightInfo(0)
+    return (c:getR() + c:getG() + c:getB()) / 3, c
+end
+
+-- ball: what the balls around have made
+COMMANDS.ball = function(id, w, p)
+    local info = RainbowLight.ballInfo()
+    finishCmd("done", "balls=" .. info.balls .. " squares=" .. #info.squares .. " lights=" .. info.lights
+        .. " lit=" .. info.lit .. " markers=" .. info.markers .. " mode=" .. RainbowLight.BALL_MODE
+        .. " paused=" .. tostring(RainbowLight.ballPaused))
+end
+
+-- ballmode light|marker
+COMMANDS.ballmode = function(id, w, p)
+    RainbowLight.BALL_MODE = w[2]
+    RainbowLight.rebuildBalls()
+    finishCmd("done", "mode=" .. RainbowLight.BALL_MODE)
+end
+
+-- balloff: paused, every spot light off (with switchLight)
+COMMANDS.balloff = function(id, w, p)
+    local ball = RainbowLight.firstBall()
+    if not ball or ball.mode ~= "light" then finishCmd("error", "no light-mode ball") return end
+    RainbowLight.ballPaused = true
+    for _, s in ipairs(ball.squares) do
+        if s.on then RainbowLight.ballSetSquare(ball, s, nil, false) end
+    end
+    ball.lamp:switchLight(true)
+    finishCmd("done", "all off")
+end
+
+-- ballpause on|off
+COMMANDS.ballpause = function(id, w, p)
+    RainbowLight.ballPaused = w[2] == "on"
+    finishCmd("done", "paused=" .. tostring(RainbowLight.ballPaused))
+end
+
+-- ballturn <0..1>: paused, the ball turned to that part of a turn
+COMMANDS.ballturn = function(id, w, p)
+    RainbowLight.ballPaused = true
+    RainbowLight.turnBalls(math.pi * 2 * tonumber(w[2]))
+    finishCmd("done", "turn " .. w[2] .. " lit=" .. RainbowLight.ballInfo().lit)
+end
+
+-- ballmeasure: light on the spot squares, lit ones against dark ones, and how many lit ones show
+-- their spot's color. A spot light reaches the squares next to it, so those count as neither.
+COMMANDS.ballmeasure = function(id, w, p)
+    local info = RainbowLight.ballInfo()
+    local onSum, onN, offSum, offN, match, colored = 0, 0, 0, 0, 0, 0
+    local function nextToLit(s)
+        for _, o in ipairs(info.squares) do
+            if o.on and math.abs(o.x - s.x) <= 1 and math.abs(o.y - s.y) <= 1 then return true end
+        end
+        return false
+    end
+    for _, s in ipairs(info.squares) do
+        local v, c = brightness(s.sq)
+        if s.on then
+            onSum, onN = onSum + v, onN + 1
+            local want = colorClass(s.color[1], s.color[2], s.color[3])
+            if want ~= "none" then
+                colored = colored + 1
+                if colorClass(c:getR(), c:getG(), c:getB()) == want then match = match + 1 end
+            end
+        elseif not nextToLit(s) then
+            offSum, offN = offSum + v, offN + 1
+        end
+    end
+    finishCmd("done", string.format("lit=%d avg=%.3f dark=%d avg=%.3f colorMatch=%d/%d",
+        onN, onN > 0 and onSum / onN or 0, offN, offN > 0 and offSum / offN or 0, match, colored))
+end
+
+-- balllatency switch|none: paused; one dark spot square far from lit ones that the player sees
+-- (unseen squares read 0) is switched on (white), then off, and the time until its light rises and
+-- falls back is taken (8 s at most each)
+COMMANDS.balllatency = function(id, w, p)
+    local ball = RainbowLight.firstBall()
+    if not ball or ball.mode ~= "light" then finishCmd("error", "no light-mode ball") return end
+    RainbowLight.ballPaused = true
+    local target = nil
+    for _, s in ipairs(ball.squares) do
+        if not s.on and brightness(s.sq) > 0.05 then
+            local alone = true
+            for _, o in ipairs(ball.squares) do
+                if o.on and math.abs(o.x - s.x) <= 3 and math.abs(o.y - s.y) <= 3 then alone = false break end
+            end
+            if alone then target = s break end
+        end
+    end
+    if not target then finishCmd("error", "no dark square away from the spots") return end
+    local refresh = w[2] == "switch"
+    local base = brightness(target.sq)
+    RainbowLight.ballSetSquare(ball, target, { 1, 1, 1 }, refresh)
+    local t0 = getTimestampMs()
+    local phase, upMs, peak = "up", nil, base
+    running.deadline = t0 + 20000
+    running.poll = function()
+        local v = brightness(target.sq)
+        local ms = getTimestampMs() - t0
+        if phase == "up" then
+            if v > peak then peak = v end
+            if v > base + 0.1 or ms > 8000 then
+                upMs = v > base + 0.1 and ms or -1
+                RainbowLight.ballSetSquare(ball, target, nil, refresh)
+                phase, t0 = "down", getTimestampMs()
+            end
+            return false
+        end
+        if v < base + 0.05 or ms > 8000 then
+            finishCmd("done", string.format("%s: on after %s ms, off after %s ms (base=%.3f peak=%.3f at %d,%d)",
+                w[2], upMs >= 0 and tostring(upMs) or "never", v < base + 0.05 and tostring(ms) or "never",
+                base, peak, target.x, target.y))
+            return true
+        end
+        return false
+    end
+end
+
+-- ---------- mirror ball in a room ----------
+
+-- spot squares of the ball next to (8 around) a square that is not in the lamp's room, and those
+-- outside squares (outdoors, with a floor) that are within 2 of such a spot square
+local function wallSides(ball)
+    local cell = getCell()
+    local room = ball.lamp:getSquare():getRoom()
+    local z = ball.lamp:getZ()
+    local sides, beyond, seen = {}, {}, {}
+    for _, s in ipairs(ball.squares) do
+        local side = false
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                local o = cell:getGridSquare(s.x + dx, s.y + dy, z)
+                if o and o:getRoom() ~= room then side = true end
+            end
+        end
+        if side then
+            table.insert(sides, s)
+            for dx = -2, 2 do
+                for dy = -2, 2 do
+                    local o = cell:getGridSquare(s.x + dx, s.y + dy, z)
+                    local key = (s.x + dx) .. "," .. (s.y + dy)
+                    if o and not seen[key] and o:getRoom() == nil and o:isOutside() and o:getFloor() then
+                        seen[key] = true
+                        table.insert(beyond, o)
+                    end
+                end
+            end
+        end
+    end
+    return sides, beyond
+end
+
+-- ballgain <0..1>: paused, the ball turned there; the light on the lit spot squares, then on the
+-- same squares with every spot light off (in a small room the spots' light fills the room, so lit
+-- squares against the other squares says little there)
+COMMANDS.ballgain = function(id, w, p)
+    local ball = RainbowLight.firstBall()
+    if not ball or ball.mode ~= "light" then finishCmd("error", "no light-mode ball") return end
+    RainbowLight.ballPaused = true
+    RainbowLight.turnBalls(math.pi * 2 * tonumber(w[2]))
+    local lit = {}
+    for _, s in ipairs(ball.squares) do
+        if s.on then table.insert(lit, s) end
+    end
+    local function avg()
+        local sum = 0
+        for _, s in ipairs(lit) do sum = sum + brightness(s.sq) end
+        return #lit > 0 and sum / #lit or 0
+    end
+    local t0, on = getTimestampMs(), nil
+    running.deadline = t0 + 10000
+    running.poll = function()
+        if getTimestampMs() - t0 < 2000 then return false end
+        if not on then
+            on = avg()
+            for _, s in ipairs(ball.squares) do
+                if s.on then RainbowLight.ballSetSquare(ball, s, nil, false) end
+            end
+            ball.lamp:switchLight(true)
+            t0 = getTimestampMs()
+            return false
+        end
+        finishCmd("done", string.format("lit=%d on=%.3f off=%.3f of %d squares", #lit, on, avg(), #ball.squares))
+        return true
+    end
+end
+
+-- ballroom: are all the ball's lights in the lamp's room, and how many sit by a wall
+COMMANDS.ballroom = function(id, w, p)
+    local ball = RainbowLight.firstBall()
+    if not ball or ball.mode ~= "light" then finishCmd("error", "no light-mode ball") return end
+    local room = ball.lamp:getSquare():getRoom()
+    local inRoom = 0
+    for _, s in ipairs(ball.squares) do
+        if s.sq:getRoom() == room then inRoom = inRoom + 1 end
+    end
+    local sides, beyond = wallSides(ball)
+    finishCmd("done", "squares=" .. #ball.squares .. " inRoom=" .. inRoom .. " byWall=" .. #sides
+        .. " outsideNear=" .. #beyond .. " room=" .. tostring(room and room:getName()))
+end
+
+-- ballwallspot: an outdoor square 2 to 4 from the room the player can stand on to look at the wall
+COMMANDS.ballwallspot = function(id, w, p)
+    local ball = RainbowLight.firstBall()
+    if not ball or ball.mode ~= "light" then finishCmd("error", "no light-mode ball") return end
+    local _, beyond = wallSides(ball)
+    local room = ball.lamp:getSquare():getRoom()
+    local cell = getCell()
+    local z = ball.lamp:getZ()
+    for _, o in ipairs(beyond) do
+        local x, y = o:getX(), o:getY()
+        -- step away from the room up to 2 more squares, staying outdoors
+        local near = 0
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                local n = cell:getGridSquare(x + dx, y + dy, z)
+                if n and n:getRoom() == room then near = near + 1 end
+            end
+        end
+        if near == 0 and o:isFree(false) then
+            finishCmd("done", x .. " " .. y .. " " .. z)
+            return
+        end
+    end
+    finishCmd("error", "no outdoor square by the room (outsideNear=" .. #beyond .. ")")
+end
+
+-- ballwall: paused, all spot lights off. The outdoor squares near the room are read, then every
+-- spot light by the wall goes on (white) and they are read again: does the light come through the
+-- wall? Squares within 2 of a window or door of the room are counted apart from the others. Then,
+-- to show the reading works, the same kind of light is put on a seen outdoor square by the wall.
+-- Only squares the player sees count (unseen ones read 0).
+COMMANDS.ballwall = function(id, w, p)
+    local ball = RainbowLight.firstBall()
+    if not ball or ball.mode ~= "light" then finishCmd("error", "no light-mode ball") return end
+    RainbowLight.ballPaused = true
+    local cell = getCell()
+    local room = ball.lamp:getSquare():getRoom()
+    local sides, beyond = wallSides(ball)
+    local function nearOpening(o)
+        for dx = -2, 2 do
+            for dy = -2, 2 do
+                local a = cell:getGridSquare(o:getX() + dx, o:getY() + dy, o:getZ())
+                if a and a:getRoom() == room then
+                    for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+                        local n = cell:getGridSquare(a:getX() + d[1], a:getY() + d[2], a:getZ())
+                        if n and n:getRoom() ~= room and (a:isWindowTo(n) or a:isDoorTo(n)) then return true end
+                    end
+                end
+            end
+        end
+        return false
+    end
+    local opening = {}
+    for i, o in ipairs(beyond) do opening[i] = nearOpening(o) end
+    local function read()
+        local vals = {}
+        for i, o in ipairs(beyond) do vals[i] = brightness(o) end
+        return vals
+    end
+    -- {avg, max, count, max at} for the seen squares, by the openings (true) or not (false)
+    local function gain(base, now, byOpening)
+        local sum, n, most, at = 0, 0, 0, "-"
+        for i, v in ipairs(now) do
+            if base[i] > 0.02 and opening[i] == byOpening then
+                sum, n = sum + (v - base[i]), n + 1
+                if v - base[i] > most then most, at = v - base[i], beyond[i]:getX() .. "," .. beyond[i]:getY() end
+            end
+        end
+        return string.format("avg %+.3f max %+.3f at %s (%d squares)", n > 0 and sum / n or 0, most, at, n), n > 0 and most or -1
+    end
+    local base = read()
+    -- the probe square: a seen outdoor square next to a spot square by the wall, away from openings
+    local probeSq
+    for i, o in ipairs(beyond) do
+        if not probeSq and base[i] > 0.02 and not opening[i] then
+            for _, s in ipairs(sides) do
+                if math.abs(o:getX() - s.x) <= 1 and math.abs(o:getY() - s.y) <= 1 then probeSq = o break end
+            end
+        end
+    end
+    for _, s in ipairs(sides) do RainbowLight.ballSetSquare(ball, s, { 1, 1, 1 }, false) end
+    ball.lamp:switchLight(true)
+    local t0, phase, wallText, wallMost, openText, probe = getTimestampMs(), "wall", nil, nil, nil, nil
+    running.deadline = t0 + 15000
+    running.poll = function()
+        if getTimestampMs() - t0 < 3000 then return false end
+        if phase == "wall" then
+            local now = read()
+            wallText, wallMost = gain(base, now, false)
+            openText = gain(base, now, true)
+            for _, s in ipairs(sides) do RainbowLight.ballSetSquare(ball, s, nil, false) end
+            if probeSq then
+                probe = cell:addLamppost(probeSq:getX(), probeSq:getY(), probeSq:getZ(), 0.5, 0.5, 0.5, RainbowLight.BALL_LIGHT_RADIUS)
+            end
+            ball.lamp:switchLight(true)
+            phase, t0 = "probe", getTimestampMs()
+            return false
+        end
+        local probeText, probeMost = "no seen outdoor square by the wall", -1
+        if probe then
+            probeText, probeMost = gain(base, read(), false)
+            probeText = probeText .. " probe at " .. probeSq:getX() .. "," .. probeSq:getY()
+            cell:removeLamppost(probe)
+            ball.lamp:switchLight(true)
+        end
+        finishCmd("done", "byWall=" .. #sides .. " | wall: " .. wallText .. " | windows/doors: " .. openText
+            .. " | same light outdoors: " .. probeText
+            .. string.format(" | wallMax=%.3f probeMax=%.3f", wallMost, probeMost)
+            .. " | player at " .. math.floor(p:getX()) .. "," .. math.floor(p:getY()))
+        return true
+    end
 end
 
 COMMANDS.ping = function(id, w, p)

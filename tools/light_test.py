@@ -12,9 +12,14 @@ screenshots: <root>\\client1\\Screenshots\\rl_*.png.
 
 Reuses the server/client launching of ..\\CheeseMaking\\tools\\mp_test.py (imported, with the
 pilot file names switched to RainbowLight_*).
-Options: --root DIR (default %USERPROFILE%\\PZTest_rainbow)
+Options: --root DIR (default %USERPROFILE%\\PZTest_rainbow), --gif (frames for make_gif.py),
+         --car (headlights only: the server puts a car down, marks its headlights rainbow and the
+         game reads the light in front of it), --ball (mirror ball only: a lamp with the mirror
+         ball bulb; the spots, how fast a spot light shows, the weight, and the floor-marker mode),
+         --room (the mirror ball in a room of a house: spots inside, nothing through the walls)
 """
 import argparse
+import colorsys
 import os
 import subprocess
 import sys
@@ -63,7 +68,272 @@ def strength(rgb, ch):
 
 
 
-def run_tests(root, gif=False):
+def parse_car(text):
+    """carlight answer -> ({'E': (r, g, b, class), ...}, state text)"""
+    strips, state = {}, ''
+    for part in text.split('|'):
+        words = part.split()
+        if words and words[0] in ('E', 'W', 'S', 'N') and len(words) >= 5:
+            vals = dict(p.split('=') for p in words[1:4])
+            strips[words[0]] = (float(vals['r']), float(vals['g']), float(vals['b']), words[4])
+        else:
+            state = part.strip()
+    return strips, state
+
+
+def hue_sector(strip):
+    """(r, g, b, class) -> which sixth of the color wheel (0 red, 1 yellow, 2 green, 3 cyan, 4 blue,
+    5 magenta), or None when the light is nearly white"""
+    if not strip:
+        return None
+    h, s, _ = colorsys.rgb_to_hsv(*strip[:3])
+    return None if s < 0.2 else int(h * 6 + 0.5) % 6
+
+
+def car_tests(pilot, x, y, z, shots):
+    """Headlights (prototype): does createSpotLightColor change the beam color on screen?"""
+    kind, text, _ = pilot.run(f'server car {x} {y} {z}', 30)
+    note(f'car: {kind} {text}')
+    if kind != 'done':
+        mt.problem('車を置けませんでした: ' + text)
+        return
+    vid, cx, cy, cz = text.split()[:4]
+    # stand beside the car, out of the beams
+    mt.rcon(f'teleportto "test1" {cx},{int(cy) + 4},{cz}')
+    time.sleep(6)
+    note('server night: ' + pilot.run('server night 0 0 0 hour=23', 30)[1])
+    note('client ' + pilot.run('time 23')[1])
+    note('settle: ' + pilot.run(f'carsettle {vid}', 170)[1])
+    pilot.run('ui off')
+
+    def shot(name):
+        pilot.run(f'shot {name}')
+        time.sleep(2)
+
+    def look(label):
+        text = pilot.run(f'carlight {vid}')[1]
+        note(f'{label}: {text}')
+        return parse_car(text)
+
+    off, _ = look('C0 headlights off')
+    shot('rl_car_0_off.png')
+    note('server ' + pilot.run(f'server lights 0 0 0 id={vid} on=1', 30)[1])
+    time.sleep(3)
+    on, state = look('C1 headlights on')
+    shot('rl_car_1_white.png')
+    # the beam side: where the light grew most when the headlights came on
+    gain = {d: sum(on[d][:3]) - sum(off[d][:3]) for d in on if d in off}
+    front = max(gain, key=gain.get) if gain else 'E'
+    mt.result('PASS' if gain.get(front, 0) > 0.1 else 'FAIL', 'C1',
+              f'ヘッドライトを点けると前が明るくなる: 前={front} 明るさの増え方 '
+              + ' '.join(f'{d}={g:+.3f}' for d, g in gain.items()) + f' ({state})')
+
+    note('server ' + pilot.run(f'server mark 0 0 0 id={vid} on=1', 30)[1])
+    time.sleep(2)
+    _, state = look('mark')
+    mt.result('PASS' if 'mark=true' in state else 'FAIL', 'C2', f'サーバーで付けた印がゲームに届く: {state}')
+
+    pilot.run('cycle off')
+    for cid, h, want, png in (('C3', 0.0, 'red', 'rl_car_3_red.png'), ('C4', 1 / 3, 'green', 'rl_car_4_green.png'),
+                              ('C5', 2 / 3, 'blue', 'rl_car_5_blue.png')):
+        note(pilot.run(f'carhue {h:.4f}')[1])
+        time.sleep(1.5)
+        strips, state = look(f'{cid} hue {h:.2f}')
+        got = strips.get(front, (0, 0, 0, '?'))
+        mt.result('PASS' if got[3] == want else 'FAIL', cid,
+                  f'ビームが{want}になる: 前 r={got[0]:.3f} g={got[1]:.3f} b={got[2]:.3f} -> {got[3]}')
+        shot(png)
+
+    # the rainbow running: sample at uneven gaps (a steady gap that divides the 2 s trip evenly
+    # keeps landing on the same colors)
+    seen = []
+    note('cycle ' + pilot.run('cycle on')[1])
+    for i in range(12):
+        time.sleep((0.35, 0.5, 0.8)[i % 3])
+        strips, _ = look(f'C6 rainbow {i + 1}')
+        seen.append(hue_sector(strips.get(front)))
+        if i in (3, 7):
+            shot(f'rl_car_6_rainbow_{i + 1}.png')
+    # the beam follows the hue closely, so it is mostly a mix of two channels ("red+green"); count
+    # the sixths of the color wheel it was seen in instead
+    kinds = sorted(set(k for k in seen if k is not None))
+    mt.result('PASS' if len(kinds) >= 4 else 'FAIL', 'C6',
+              f'虹色（2 秒で一周）: 12 回で見えた色相 6 区分のうち {len(kinds)} 区分 {kinds}（並び {seen}、0=赤 1=黄 2=緑 3=水色 4=青 5=赤紫）')
+    mt.result('INFO', 'P1', f'車 1 台を虹色: {pilot.run("perf 10", 25)[1]}')
+    pilot.run('cycle off')
+    mt.result('INFO', 'P2', f'虹色を止めたとき: {pilot.run("perf 10", 25)[1]}')
+
+    note('server ' + pilot.run(f'server mark 0 0 0 id={vid} on=0', 30)[1])
+    pilot.run('cycle on')
+    time.sleep(2)
+    strips, state = look('C7 unmarked')
+    got = strips.get(front, (0, 0, 0, '?'))
+    # the normal headlight is a warm white (VehicleLight r=1.0 g=0.82 b=0.71): red >= green >= blue,
+    # close together
+    warm = got[0] >= got[1] >= got[2] and got[0] - got[2] < 0.15
+    mt.result('PASS' if warm and 'colored=0' in state else 'FAIL', 'C7',
+              f'印を外すと普通の色（やや黄色い白）に戻る: 前 r={got[0]:.3f} g={got[1]:.3f} b={got[2]:.3f} ({state})')
+    shot('rl_car_7_back.png')
+    pilot.run('ui on')
+
+
+def ball_tests(pilot, x, y, z, shots):
+    """Mirror ball (prototype): spots from small lights switched on and off around a lamp"""
+    ball_bulb = 'RainbowLight.LightBulbMirrorBall'
+    pilot.run('ballpause on')
+    kind, text, _ = pilot.run(f'server place {x} {y} {z} bulb={ball_bulb}', 30)
+    note(f'place: {kind} {text}')
+    if kind != 'done':
+        mt.problem('ランプを置けませんでした: ' + text)
+        return
+    lx, ly, lz = text.split()[:3]
+    lamp = f'{lx} {ly} {lz}'
+    mt.rcon(f'teleportto "test1" {int(lx) + 2},{int(ly) + 3},{lz}')
+    time.sleep(6)
+    note('server night: ' + pilot.run('server night 0 0 0 hour=23', 30)[1])
+    note('client ' + pilot.run('time 23')[1])
+    note('settle: ' + pilot.run(f'settle {lamp}', 170)[1])
+    pilot.run('ui off')
+
+    def shot(name):
+        pilot.run(f'shot {name}')
+        time.sleep(2)
+
+    info = pilot.run('ball')[1]
+    lamp_now = pilot.run(f'measure {lamp}')[1]
+    note(f'ball: {info} / {lamp_now}')
+    vals = dict(p.split('=') for p in info.split() if '=' in p)
+    mt.result('PASS' if int(vals.get('lights', 0)) > 0 else 'FAIL', 'B1',
+              f'ミラーボール電球のランプの周りに光の点用の光ができる: {info}')
+    shot('rl_ball_0_paused.png')
+
+    # spots standing still: lit spot squares against dark ones
+    for cid, turn in (('B2', 0.0), ('B3', 0.37)):
+        note(pilot.run(f'ballturn {turn}')[1])
+        time.sleep(2)
+        text = pilot.run('ballmeasure')[1]
+        parts = text.split()   # lit=N avg=A dark=N avg=A colorMatch=M/N
+        lit = float(parts[1].split('=')[1])
+        dark = float(parts[3].split('=')[1])
+        mt.result('PASS' if lit - dark > 0.1 else 'FAIL', cid,
+                  f'止めた点が床に見える（回転 {turn}）: 点のマス {lit:.3f} / 暗いマス {dark:.3f} / {text}')
+        shot(f'rl_ball_{cid}.png')
+
+    # how fast one spot light shows and goes, without and with the lamp's switchLight
+    for cid, mode in (('B4', 'none'), ('B5', 'switch'), ('B6', 'none'), ('B7', 'switch')):
+        note(pilot.run('balloff')[1])
+        time.sleep(4)
+        text = pilot.run(f'balllatency {mode}', 25)[1]
+        mt.result('INFO', cid, f'光の点 1 つを点けて消す（{"そのまま" if mode == "none" else "switchLight あり"}）: {text}')
+        time.sleep(1)
+
+    # turning
+    pilot.run('ballpause off')
+    time.sleep(2)
+    for i in range(10):
+        pilot.run(f'shot rl_ball_run_{i:02d}.png')
+        time.sleep(0.3)
+    mt.result('INFO', 'P1', f'ミラーボールが回っているとき: {pilot.run("perf 10", 25)[1]} / {pilot.run("ball")[1]}')
+    pilot.run('ballpause on')
+    pilot.run('ballturn 0')
+    time.sleep(1)
+    mt.result('INFO', 'P2', f'止めたとき: {pilot.run("perf 10", 25)[1]}')
+
+    # floor markers instead of lights
+    note(pilot.run('ballmode marker')[1])
+    pilot.run('ballpause off')
+    time.sleep(3)
+    note(pilot.run('ball')[1])
+    for i in range(4):
+        pilot.run(f'shot rl_ball_marker_{i:02d}.png')
+        time.sleep(0.5)
+    mt.result('INFO', 'P3', f'床の印で回しているとき: {pilot.run("perf 10", 25)[1]}')
+    pilot.run('ballmode light')
+    pilot.run('ui on')
+
+
+def room_tests(pilot, x, y, z, shots):
+    """Mirror ball in a room of a house: spots inside, and nothing through the walls"""
+    ball_bulb = 'RainbowLight.LightBulbMirrorBall'
+    pilot.run('ballpause on')
+    kind, text, _ = pilot.run(f'server placeroom {x} {y} {z} bulb={ball_bulb}', 30)
+    note(f'placeroom: {kind} {text}')
+    if kind != 'done':
+        mt.problem('部屋にランプを置けませんでした: ' + text)
+        return
+    lx, ly, lz, sx, sy = text.split()[:5]
+    lamp = f'{lx} {ly} {lz}'
+    mt.rcon(f'teleportto "test1" {sx},{sy},{lz}')
+    time.sleep(6)
+    note('server night: ' + pilot.run('server night 0 0 0 hour=23', 30)[1])
+    note('client ' + pilot.run('time 23')[1])
+    note('settle: ' + pilot.run(f'settle {lamp}', 170)[1])
+    pilot.run('ui off')
+
+    def shot(name):
+        pilot.run(f'shot {name}')
+        time.sleep(2)
+
+    info = pilot.run('ballroom')[1]
+    vals = dict(p.split('=') for p in info.split() if '=' in p)
+    n = int(vals.get('squares', 0))
+    mt.result('PASS' if n > 0 and vals.get('inRoom') == str(n) else 'FAIL', 'I1',
+              f'部屋の中のランプで、光の点用の光が全部同じ部屋にできる: {info}')
+    shot('rl_room_0_paused.png')
+
+    # a spot lights its square: the lit spot squares, then the same squares with every spot off;
+    # lit squares against the rest is kept for information (the spots' light fills a small room)
+    for cid, turn in (('I2', 0.0), ('I3', 0.37)):
+        note(pilot.run(f'ballturn {turn}')[1])
+        time.sleep(2)
+        spread = pilot.run('ballmeasure')[1]
+        shot(f'rl_room_{cid}.png')
+        text = pilot.run(f'ballgain {turn}', 20)[1]
+        vals = dict(p.split('=') for p in text.split() if '=' in p)
+        on, off = float(vals.get('on', 0)), float(vals.get('off', 0))
+        mt.result('PASS' if on - off > 0.1 else 'FAIL', cid,
+                  f'部屋の中で止めた点が床に見える（回転 {turn}）: 点のマス 点けたとき {on:.3f} / 消したとき {off:.3f}'
+                  f' / {text} / 点のマスとほかのマス: {spread}')
+
+    pilot.run('ballpause off')
+    time.sleep(2)
+    for i in range(10):
+        pilot.run(f'shot rl_room_run_{i:02d}.png')
+        time.sleep(0.3)
+    mt.result('INFO', 'P1', f'部屋の中で回しているとき: {pilot.run("perf 10", 25)[1]}')
+
+    # from outdoors: does the light come through the wall?
+    kind, spot, _ = pilot.run('ballwallspot')
+    note(f'wall spot: {kind} {spot}')
+    if kind != 'done':
+        mt.result('INFO', 'I4', f'部屋のそばに外のマスがないので壁の確認はできない: {spot}')
+        pilot.run('ui on')
+        return
+    wx, wy, wz = spot.split()
+    mt.rcon(f'teleportto "test1" {wx},{wy},{wz}')
+    time.sleep(6)
+    note(pilot.run('balloff')[1])
+    time.sleep(4)
+    text = pilot.run('ballwall', 25)[1]
+    note('ballwall: ' + text)
+    try:
+        vals = dict(p.split('=') for p in text.split('|')[-2].split())
+        wall_max, probe_max = float(vals['wallMax']), float(vals['probeMax'])
+        # wallMax -1: no seen square away from windows and doors
+        ok = 0 <= wall_max < 0.05 and probe_max > wall_max + 0.1
+    except (IndexError, KeyError, ValueError):
+        ok = False
+    mt.result('PASS' if ok else 'FAIL', 'I4', '壁ぎわの光を全部点けても、窓やドアから離れた壁の外は明るくならない'
+              f'（外に同じ光を置くと明るくなる）: {text}')
+    pilot.run('ballpause off')
+    time.sleep(2)
+    for i in range(4):
+        pilot.run(f'shot rl_room_outside_{i:02d}.png')
+        time.sleep(0.5)
+    pilot.run('ui on')
+
+
+def run_tests(root, gif=False, car=False, ball=False, room=False):
     mods = [MOD_ID]
     server = mt.Server(root, mods)
     client = root / 'client1'
@@ -101,6 +371,15 @@ def run_tests(root, gif=False):
         kind, pos, _ = pilot.run('ping')
         note(f'player at {pos}')
         x, y, z = pos.split(',')
+        if car:
+            car_tests(pilot, x, y, z, shots)
+            return
+        if ball:
+            ball_tests(pilot, x, y, z, shots)
+            return
+        if room:
+            room_tests(pilot, x, y, z, shots)
+            return
         kind, text, _ = pilot.run(f'server place {x} {y} {z} bulb=Base.LightBulb', 30)
         note(f'place: {kind} {text}')
         if kind != 'done':
@@ -254,6 +533,9 @@ def run_tests(root, gif=False):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--gif', action='store_true', help='only film one trip around the rainbow for tools/make_gif.py')
+    ap.add_argument('--car', action='store_true', help='only the headlight tests (prototype)')
+    ap.add_argument('--ball', action='store_true', help='only the mirror ball tests (prototype)')
+    ap.add_argument('--room', action='store_true', help='only the mirror ball in a room of a house (prototype)')
     ap.add_argument('--root', default=str(Path(os.environ.get('USERPROFILE', '')) / 'PZTest_rainbow'))
     a = ap.parse_args()
     try:
@@ -265,7 +547,7 @@ def main():
         say(f'ポート {mt.RCON_PORT} にもうサーバーがいます。先に止めてください')
         return 1
     mt.setup(root, [MOD_ID])
-    run_tests(root, gif=a.gif)
+    run_tests(root, gif=a.gif, car=a.car, ball=a.ball, room=a.room)
 
     for name, path in (('client1', root / 'client1' / 'console.txt'), ('server', root / 'server' / 'server-console.txt')):
         errs = mt.mod_errors(mt.read_log(path), [MOD_ID, 'RainbowLight'])
