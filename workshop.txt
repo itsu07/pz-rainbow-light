@@ -1,4 +1,5 @@
 version=1
+id=3836015433
 title=Rainbow Light
 description=ランプに付けると、光の色が虹のように回る「虹色の電球」を追加する MOD です。点けると 2 秒で虹を一周する速さで、部屋が赤・黄・緑・水色・青・紫と照らされます。
 description=

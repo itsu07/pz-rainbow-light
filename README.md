@@ -40,9 +40,13 @@ GIF（`rainbow_light.gif`、ゲームの絵が写るのでリポジトリには�
 
 ## Workshop
 
+限定公開で投稿済み。Workshop ID 3836015433（https://steamcommunity.com/sharedfiles/filedetails/?id=3836015433）。`workshop.txt` に `id=` が入っているので、更新のときは「既存のアイテム」を選べば ID が自動で入る。
+
 ```
-python tools\make_preview.py        プレビュー（preview.png、256x256）を撮ってあるコマから作る
-python ..\tools\make_workshop.py    %USERPROFILE%\Zomboid\Workshop\itsu07_RainbowLight に投稿用フォルダを作って点検
+python tools\make_preview.py                 プレビュー（preview.png、256x256）を撮ってあるコマから作る
+python ..\tools\make_workshop.py            build\ に投稿用フォルダを作って点検
+python ..\tools\make_workshop.py --upload   %USERPROFILE%\Zomboid\Workshop\itsu07_RainbowLight に作る（投稿の直前だけ）
+python ..\tools\make_workshop.py --remove   投稿したら外す（置いたままだとゲームが Steam の版の代わりにこれを読む）
 ```
 
 投稿はゲームを Steam から起動し、ワークショップの「作成／更新」でこのフォルダを選ぶ。題名・説明文・公開範囲（限定公開）は `workshop.txt`。preview.png はゲームの画面なのでリポジトリには入れない。
